@@ -5,6 +5,7 @@ import pyautogui
 import threading
 import time
 import math
+from pynput import mouse
 
 class MoveMouseApp:
     def __init__(self, root):
@@ -21,24 +22,25 @@ class MoveMouseApp:
         self.root.configure(bg=self.preto)
         
         style = ttk.Style()
-        style.theme_use('clam') # Habilita customização avançada de cores
+        style.theme_use('clam')
         
-        # Configuração de componentes
         style.configure("TFrame", background=self.preto)
         style.configure("TLabelframe", background=self.preto, bordercolor=self.azul_gremio)
         style.configure("TLabelframe.Label", background=self.preto, foreground=self.azul_gremio, font=("Arial", 10, "bold"))
         style.configure("TLabel", background=self.preto, foreground=self.branco)
         style.configure("TCheckbutton", background=self.preto, foreground=self.branco)
         
-        # Botões Azuis com texto Branco
         style.configure("TButton", background=self.azul_gremio, foreground=self.branco, font=("Arial", 10, "bold"), borderwidth=0)
         style.map("TButton", 
                   background=[("active", "#0866ab"), ("disabled", "#333333")],
                   foreground=[("disabled", "#888888")])
 
-        # Variáveis de controle de execução
+        # --- VARIÁVEIS DE CONTROLE E EMERGÊNCIA ---
         self.running = False
         self.thread = None
+        self.click_times = []
+        self.mouse_listener = None
+        self.emergency_triggered = False
 
         # Título Principal
         title_label = ttk.Label(root, text="Configurações do Movimento", font=("Arial", 12, "bold"), foreground=self.azul_gremio)
@@ -115,6 +117,20 @@ class MoveMouseApp:
             self.entry_secs.config(state=tk.NORMAL)
             self.timer_label.config(text="Tempo restante: Configurado")
 
+    def on_click(self, x, y, button, pressed):
+        """Monitora os cliques do mouse em tempo real."""
+        if pressed and self.running:
+            current_time = time.time()
+            self.click_times.append(current_time)
+            
+            # Mantém apenas os cliques que aconteceram no último 1 segundo
+            self.click_times = [t for t in self.click_times if current_time - t <= 1.0]
+            
+            # Se deu 3 cliques ou mais em 1 segundo, aciona a parada!
+            if len(self.click_times) >= 3:
+                self.emergency_triggered = True
+                self.click_times.clear()
+
     def move_mouse_loop(self):
         screen_width, screen_height = pyautogui.size()
         center_x = screen_width // 2
@@ -134,6 +150,13 @@ class MoveMouseApp:
         clicked_this_lap = [False] * clicks_per_lap
 
         while self.running:
+            # 1. Verifica se a trava de emergência foi puxada (3 cliques)
+            if self.emergency_triggered:
+                self.emergency_triggered = False
+                self.root.after(0, self.stop_emergency)
+                break
+
+            # 2. Verifica tempo expirado
             if not self.indefinite_var.get():
                 elapsed = time.time() - start_time
                 remaining = total_seconds - elapsed
@@ -180,7 +203,14 @@ class MoveMouseApp:
 
     def start(self):
         self.running = True
-        self.status_label.config(text="Status: RODANDO", foreground="#00FF00") # Verde vivo pro fundo preto
+        self.emergency_triggered = False
+        self.click_times.clear()
+        
+        # Inicia o monitor de cliques em segundo plano
+        self.mouse_listener = mouse.Listener(on_click=self.on_click)
+        self.mouse_listener.start()
+
+        self.status_label.config(text="Status: RODANDO", foreground="#00FF00")
         self.start_btn.config(state=tk.DISABLED)
         self.stop_btn.config(state=tk.NORMAL)
         
@@ -194,7 +224,12 @@ class MoveMouseApp:
 
     def stop(self):
         self.running = False
-        self.status_label.config(text="Status: PARADO", foreground="#FF4444") # Vermelho vivo pro fundo preto
+        
+        # Para o monitor de cliques
+        if self.mouse_listener:
+            self.mouse_listener.stop()
+
+        self.status_label.config(text="Status: PARADO", foreground="#FF4444")
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
         self.chk_indefinite.config(state=tk.NORMAL)
@@ -202,9 +237,14 @@ class MoveMouseApp:
 
     def stop_by_timeout(self):
         self.stop()
-        messagebox.showinfo("Tempo Concluído", "O tempo programado de execução acabou. O robô foi parado com sucesso!")
+        messagebox.showinfo("Tempo Concluído", "O tempo programado acabou. O robô parou com sucesso!")
+
+    def stop_emergency(self):
+        self.stop()
+        messagebox.showwarning("Saída de Emergência", "Emergência acionada! (3 cliques detectados).\nO controle do mouse voltou para você.")
 
 if __name__ == "__main__":
+    # Mantém o failsafe do canto da tela ativado como plano B
     pyautogui.FAILSAFE = True
     root = tk.Tk()
     app = MoveMouseApp(root)
